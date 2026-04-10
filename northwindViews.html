@@ -6,7 +6,7 @@
   <title>Northwind · View Manager</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
-  <script src="/assets/sql-wasm.js"></script>
+  <script src="./assets/sql-wasm.js"></script>
   <style>
     * { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
     body { background: #0f1113; color: #e6eef3; }
@@ -253,8 +253,8 @@ ORDER BY RequiredDate` }
 
     async function initDb() {
       try {
-        SQL = await initSqlJs({ locateFile: file => file === 'sql-wasm.wasm' ? '/assets/sql-wasm.wasm' : file });
-        const resp = await fetch('/assets/northwind.db');
+        SQL = await initSqlJs({ locateFile: file => file === 'sql-wasm.wasm' ? './assets/sql-wasm.wasm' : file });
+        const resp = await fetch('./assets/northwind.db');
         const ab = await resp.arrayBuffer();
         db = new SQL.Database(new Uint8Array(ab));
         document.getElementById('dbStatus').innerHTML = '<i class="fas fa-check-circle text-emerald-400"></i> ready';
