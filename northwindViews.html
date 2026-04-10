@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+  <title>Northwind · View Manager</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+  <script src="/assets/sql-wasm.js"></script>
+  <style>
+    * { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+    body { background: #0f1113; color: #e6eef3; }
+    .card { background: #1e293b; border-radius: 1rem; border: 1px solid #334155; }
+    .sql-area { font-family: 'Monaco', monospace; font-size: 0.75rem; background: #0f172a; color: #e2e8f0; }
+    .btn { transition: all 0.1s ease; }
+    .btn:active { transform: scale(0.97); }
+    .view-row { background: #0f172a; border-radius: 0.5rem; padding: 0.5rem; margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; }
+    .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 1000; visibility: hidden; opacity: 0; transition: 0.2s; }
+    .modal.active { visibility: visible; opacity: 1; }
+    .modal-content { background: #1e293b; border-radius: 1rem; width: 90%; max-width: 900px; max-height: 85vh; overflow: auto; padding: 1rem; }
+    .code-block { background: #0f172a; padding: 0.75rem; border-radius: 0.5rem; font-family: monospace; font-size: 0.7rem; white-space: pre-wrap; word-break: break-all; }
+    .copy-btn { cursor: pointer; transition: 0.1s; }
+    .copy-btn:active { transform: scale(0.95); }
+    .suggestions-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.75rem; max-height: 400px; overflow-y: auto; padding-right: 0.5rem; }
+    .suggestion-card { background: #0f172a; border-radius: 0.5rem; padding: 0.5rem; border-left: 3px solid #f59e0b; }
+    main { overflow-y: auto; }
+  </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden antialiased" style="padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);">
+
+  <!-- Header (fixed height) -->
+  <header class="h-12 bg-slate-800/90 backdrop-blur-sm border-b border-slate-700 flex items-center justify-between px-3 flex-shrink-0">
+    <div class="flex items-center gap-2"><i class="fas fa-database text-indigo-400"></i><h1 class="font-semibold text-sm">Northwind View Manager</h1></div>
+    <div class="text-xs text-slate-400"><span id="dbStatus">loading...</span></div>
+  </header>
+
+  <!-- Main content (flex:1, scrollable) -->
+  <main class="flex-1 overflow-y-auto p-4">
+    <div class="grid md:grid-cols-2 gap-4 max-w-7xl mx-auto">
+      <!-- Left: View Creator -->
+      <div class="card p-4">
+        <h2 class="text-md font-semibold mb-2"><i class="fas fa-plus-circle text-emerald-400 mr-1"></i>Create New View</h2>
+        <div class="mb-2">
+          <label class="text-xs text-slate-400 block mb-1">View Name</label>
+          <input type="text" id="viewName" placeholder="e.g., CustomerLifetimeValue" class="w-full bg-slate-800 border border-slate-600 rounded-md p-2 text-sm">
+        </div>
+        <div class="mb-2">
+          <label class="text-xs text-slate-400 block mb-1">SELECT Statement (without the CREATE VIEW ... AS)</label>
+          <textarea id="viewSelect" rows="5" placeholder="SELECT ..." class="w-full bg-slate-800 border border-slate-600 rounded-md p-2 text-xs font-mono"></textarea>
+        </div>
+        <button id="createViewBtn" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded-md text-sm w-full btn"><i class="fas fa-save"></i> Create View</button>
+        <div id="createResult" class="mt-2 text-xs text-center"></div>
+
+        <hr class="my-4 border-slate-700">
+
+        <h2 class="text-md font-semibold mb-2"><i class="fas fa-lightbulb text-amber-400 mr-1"></i>Suggested Views</h2>
+        <div class="suggestions-grid" id="suggestionsContainer"></div>
+      </div>
+
+      <!-- Right: Existing Views & Query -->
+      <div class="card p-4">
+        <div class="flex justify-between items-center mb-2">
+          <h2 class="text-md font-semibold"><i class="fas fa-list-ul text-indigo-400 mr-1"></i>Existing Views</h2>
+          <div class="flex gap-2">
+            <button id="showAllSqlBtn" class="text-xs bg-amber-700 hover:bg-amber-600 px-2 py-1 rounded"><i class="fas fa-copy"></i> Show All SQL</button>
+            <button id="refreshViewsBtn" class="text-xs text-slate-400 hover:text-white"><i class="fas fa-sync-alt"></i> Refresh</button>
+          </div>
+        </div>
+        <div id="viewsList" class="max-h-64 overflow-y-auto mb-4 space-y-1">
+          <div class="text-slate-500 text-xs text-center">Loading...</div>
+        </div>
+
+        <hr class="my-3 border-slate-700">
+
+        <h2 class="text-md font-semibold mb-2"><i class="fas fa-play text-emerald-400 mr-1"></i>Query a View</h2>
+        <div class="flex gap-2">
+          <select id="viewSelectQuery" class="bg-slate-800 border border-slate-600 rounded-md p-2 text-sm flex-1"></select>
+          <button id="queryViewBtn" class="bg-indigo-600 px-3 py-2 rounded-md text-sm btn"><i class="fas fa-search"></i> Run</button>
+        </div>
+        <div class="mt-2">
+          <label class="text-xs text-slate-400">Or custom SQL on views/tables:</label>
+          <textarea id="customSql" rows="3" placeholder="SELECT * FROM [Customer Lifetime Value] LIMIT 20" class="w-full bg-slate-800 border border-slate-600 rounded-md p-2 text-xs font-mono"></textarea>
+          <button id="runCustomSqlBtn" class="mt-1 bg-slate-600 hover:bg-slate-500 px-3 py-1 rounded-md text-xs w-full btn">Execute Custom SQL</button>
+        </div>
+        <div id="queryResult" class="mt-3 text-xs overflow-auto max-h-60 border border-slate-700 rounded-md p-2 bg-slate-900/50"></div>
+      </div>
+    </div>
+
+    <!-- Export Database (full width, below grid) -->
+    <div class="card p-4 mt-4 flex justify-between items-center max-w-7xl mx-auto">
+      <div><i class="fas fa-download text-blue-400 mr-2"></i> <span class="text-sm">Views are stored in the browser's memory. Export the modified database to keep them.</span></div>
+      <button id="exportDbBtn" class="bg-emerald-700 hover:bg-emerald-600 px-4 py-2 rounded-md text-sm btn"><i class="fas fa-save"></i> Export DB with Views</button>
+    </div>
+  </main>
+
+  <!-- Footer (fixed height) -->
+  <footer class="h-7 bg-slate-800/70 border-t border-slate-700 flex items-center justify-center text-[10px] text-slate-500 gap-2 flex-shrink-0">
+    <i class="fas fa-eye mr-1"></i> Create, manage, and query views
+  </footer>
+
+  <!-- Modals (unchanged) -->
+  <div id="sqlModal" class="modal">
+    <div class="modal-content">
+      <div class="flex justify-between items-center mb-2">
+        <h3 id="sqlModalTitle" class="text-sm font-semibold">View Definition</h3>
+        <button id="closeSqlModalBtn" class="text-xl">&times;</button>
+      </div>
+      <div id="sqlModalBody" class="text-xs overflow-auto max-h-[60vh]">
+        <pre class="code-block"></pre>
+      </div>
+    </div>
+  </div>
+
+  <div id="allSqlModal" class="modal">
+    <div class="modal-content">
+      <div class="flex justify-between items-center mb-2">
+        <h3 class="text-sm font-semibold">All View Definitions</h3>
+        <button id="closeAllSqlModalBtn" class="text-xl">&times;</button>
+      </div>
+      <div class="mb-2 text-right">
+        <button id="copyAllSqlBtn" class="bg-emerald-600 hover:bg-emerald-500 text-xs px-3 py-1 rounded"><i class="fas fa-copy"></i> Copy All</button>
+      </div>
+      <textarea id="allSqlTextarea" rows="15" class="w-full bg-slate-900 border border-slate-600 rounded-md p-2 text-xs font-mono" readonly></textarea>
+      <div id="copyFeedback" class="text-xs text-center mt-2 text-emerald-400 hidden">Copied!</div>
+    </div>
+  </div>
+
+  <script>
+    let SQL, db;
+
+    const SUGGESTED_VIEWS = [
+      { name: "Customer Lifetime Value", sql: `SELECT 
+    c.CustomerID,
+    c.CompanyName,
+    c.ContactName,
+    c.Country,
+    COUNT(DISTINCT o.OrderID) AS TotalOrders,
+    COALESCE(SUM(od.UnitPrice * od.Quantity * (1 - od.Discount)), 0) AS TotalSpent,
+    ROUND(COALESCE(SUM(od.UnitPrice * od.Quantity * (1 - od.Discount)), 0) / 
+          NULLIF(COUNT(DISTINCT o.OrderID), 0), 2) AS AvgOrderValue
+FROM Customers c
+LEFT JOIN Orders o ON c.CustomerID = o.CustomerID
+LEFT JOIN [Order Details] od ON o.OrderID = od.OrderID
+GROUP BY c.CustomerID, c.CompanyName, c.ContactName, c.Country` },
+      { name: "Product Inventory Status", sql: `SELECT 
+    ProductID,
+    ProductName,
+    QuantityPerUnit,
+    UnitsInStock,
+    UnitsOnOrder,
+    ReorderLevel,
+    Discontinued,
+    CASE 
+        WHEN Discontinued = 1 THEN 'Discontinued'
+        WHEN UnitsInStock <= ReorderLevel AND UnitsOnOrder = 0 THEN 'Critical – Order Now'
+        WHEN UnitsInStock <= ReorderLevel THEN 'Low – Reorder Pending'
+        WHEN UnitsInStock = 0 THEN 'Out of Stock'
+        ELSE 'OK'
+    END AS StockStatus,
+    (UnitsInStock - ReorderLevel) AS StockDeficit
+FROM Products` },
+      { name: "Employee Sales Performance", sql: `SELECT 
+    e.EmployeeID,
+    e.FirstName || ' ' || e.LastName AS EmployeeName,
+    e.Title,
+    COUNT(DISTINCT o.OrderID) AS OrdersProcessed,
+    COALESCE(SUM(od.UnitPrice * od.Quantity * (1 - od.Discount)), 0) AS TotalSales,
+    MAX(o.OrderDate) AS LastOrderDate,
+    ROUND(COALESCE(SUM(od.UnitPrice * od.Quantity * (1 - od.Discount)), 0) / 
+          NULLIF(COUNT(DISTINCT o.OrderID), 0), 2) AS AvgOrderValue
+FROM Employees e
+LEFT JOIN Orders o ON e.EmployeeID = o.EmployeeID
+LEFT JOIN [Order Details] od ON o.OrderID = od.OrderID
+GROUP BY e.EmployeeID, e.FirstName, e.LastName, e.Title` },
+      { name: "Late Orders", sql: `SELECT 
+    OrderID,
+    CustomerID,
+    EmployeeID,
+    OrderDate,
+    RequiredDate,
+    ShippedDate,
+    JULIANDAY(ShippedDate) - JULIANDAY(RequiredDate) AS DaysLate,
+    CASE 
+        WHEN ShippedDate > RequiredDate THEN 'Late'
+        ELSE 'On Time'
+    END AS DeliveryStatus
+FROM Orders
+WHERE ShippedDate IS NOT NULL
+  AND ShippedDate > RequiredDate` },
+      { name: "Monthly Sales Trend", sql: `SELECT 
+    STRFTIME('%Y', o.OrderDate) AS Year,
+    STRFTIME('%m', o.OrderDate) AS Month,
+    COUNT(DISTINCT o.OrderID) AS OrderCount,
+    COALESCE(SUM(od.UnitPrice * od.Quantity * (1 - od.Discount)), 0) AS TotalSales
+FROM Orders o
+LEFT JOIN [Order Details] od ON o.OrderID = od.OrderID
+WHERE o.OrderDate IS NOT NULL
+GROUP BY Year, Month
+ORDER BY Year, Month` },
+      { name: "Top 10 Customers by Revenue", sql: `SELECT 
+    c.CustomerID,
+    c.CompanyName,
+    c.Country,
+    COALESCE(SUM(od.UnitPrice * od.Quantity * (1 - od.Discount)), 0) AS TotalSpent,
+    RANK() OVER (ORDER BY COALESCE(SUM(od.UnitPrice * od.Quantity * (1 - od.Discount)), 0) DESC) AS RevenueRank
+FROM Customers c
+LEFT JOIN Orders o ON c.CustomerID = o.CustomerID
+LEFT JOIN [Order Details] od ON o.OrderID = od.OrderID
+GROUP BY c.CustomerID, c.CompanyName, c.Country
+ORDER BY TotalSpent DESC
+LIMIT 10` },
+      { name: "Shipper Performance", sql: `SELECT 
+    s.ShipperID,
+    s.CompanyName AS ShipperName,
+    COUNT(o.OrderID) AS OrdersShipped,
+    COALESCE(SUM(o.Freight), 0) AS TotalFreight,
+    ROUND(COALESCE(SUM(o.Freight), 0) / NULLIF(COUNT(o.OrderID), 0), 2) AS AvgFreightPerOrder
+FROM Shippers s
+LEFT JOIN Orders o ON s.ShipperID = o.ShipVia
+GROUP BY s.ShipperID, s.CompanyName` },
+      { name: "Discount Analysis", sql: `SELECT 
+    OrderID,
+    ProductID,
+    Discount,
+    UnitPrice,
+    Quantity,
+    UnitPrice * Quantity AS GrossAmount,
+    UnitPrice * Quantity * (1 - Discount) AS NetAmount,
+    UnitPrice * Quantity * Discount AS DiscountAmount
+FROM [Order Details]
+WHERE Discount > 0` },
+      { name: "Category Performance Over Time", sql: `SELECT 
+    c.CategoryID,
+    c.CategoryName,
+    STRFTIME('%Y', o.OrderDate) AS Year,
+    COALESCE(SUM(od.UnitPrice * od.Quantity * (1 - od.Discount)), 0) AS CategorySales
+FROM Categories c
+JOIN Products p ON c.CategoryID = p.CategoryID
+JOIN [Order Details] od ON p.ProductID = od.ProductID
+JOIN Orders o ON od.OrderID = o.OrderID
+GROUP BY c.CategoryID, c.CategoryName, Year
+ORDER BY Year, CategorySales DESC` },
+      { name: "Unshipped Orders", sql: `SELECT 
+    OrderID,
+    CustomerID,
+    OrderDate,
+    RequiredDate,
+    JULIANDAY('now') - JULIANDAY(RequiredDate) AS DaysPastDue
+FROM Orders
+WHERE ShippedDate IS NULL
+ORDER BY RequiredDate` }
+    ];
+
+    async function initDb() {
+      try {
+        SQL = await initSqlJs({ locateFile: file => file === 'sql-wasm.wasm' ? '/assets/sql-wasm.wasm' : file });
+        const resp = await fetch('/assets/northwind.db');
+        const ab = await resp.arrayBuffer();
+        db = new SQL.Database(new Uint8Array(ab));
+        document.getElementById('dbStatus').innerHTML = '<i class="fas fa-check-circle text-emerald-400"></i> ready';
+        refreshViewsList();
+        populateSuggestions();
+      } catch(e) {
+        console.error(e);
+        document.getElementById('dbStatus').innerHTML = '<i class="fas fa-exclamation-triangle text-amber-400"></i> error';
+      }
+    }
+
+    function execSafe(sql) {
+      try { return db.exec(sql); } catch(e) { console.warn(e); return { error: e.message }; }
+    }
+
+    function refreshViewsList() {
+      const container = document.getElementById('viewsList');
+      const select = document.getElementById('viewSelectQuery');
+      const res = execSafe("SELECT name FROM sqlite_master WHERE type='view' ORDER BY name");
+      if (res && !res.error && res[0] && res[0].values.length) {
+        const views = res[0].values.map(v => v[0]);
+        container.innerHTML = views.map(v => `
+          <div class="view-row">
+            <span class="font-mono text-sm">${escapeHtml(v)}</span>
+            <div class="flex gap-2">
+              <button class="view-schema-btn text-blue-400 text-xs hover:text-blue-300" data-view="${escapeHtml(v)}"><i class="fas fa-code"></i> SQL</button>
+              <button class="drop-view-btn text-red-400 text-xs hover:text-red-300" data-view="${escapeHtml(v)}"><i class="fas fa-trash-alt"></i> drop</button>
+            </div>
+          </div>
+        `).join('');
+        select.innerHTML = '<option value="">-- Select a view --</option>' + views.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+        document.querySelectorAll('.drop-view-btn').forEach(btn => {
+          btn.addEventListener('click', () => dropView(btn.dataset.view));
+        });
+        document.querySelectorAll('.view-schema-btn').forEach(btn => {
+          btn.addEventListener('click', () => showViewSql(btn.dataset.view));
+        });
+      } else {
+        container.innerHTML = '<div class="text-slate-500 text-xs">No views defined yet. Create one!</div>';
+        select.innerHTML = '<option value="">-- No views --</option>';
+      }
+    }
+
+    function dropView(viewName) {
+      if (!confirm(`Drop view "${viewName}"?`)) return;
+      const result = execSafe(`DROP VIEW IF EXISTS "${viewName.replace(/"/g, '""')}"`);
+      if (result && !result.error) {
+        refreshViewsList();
+        showResultMessage('View dropped successfully', 'green');
+      } else {
+        showResultMessage(`Error: ${result?.error}`, 'red');
+      }
+    }
+
+    function showViewSql(viewName) {
+      const quoted = `"${viewName.replace(/"/g, '""')}"`;
+      const res = execSafe(`SELECT sql FROM sqlite_master WHERE type='view' AND name = ${quoted}`);
+      if (res && !res.error && res[0] && res[0].values.length) {
+        const sqlText = res[0].values[0][0];
+        document.getElementById('sqlModalTitle').innerHTML = `SQL Definition: ${viewName}`;
+        document.getElementById('sqlModalBody').innerHTML = `<pre class="code-block">${escapeHtml(sqlText)}</pre>`;
+        document.getElementById('sqlModal').classList.add('active');
+      } else {
+        showResultMessage(`Could not retrieve SQL for ${viewName}`, 'red', 'createResult');
+      }
+    }
+
+    function showAllViewSql() {
+      const res = execSafe("SELECT name, sql FROM sqlite_master WHERE type='view' ORDER BY name");
+      if (res && !res.error && res[0] && res[0].values.length) {
+        let allSql = '';
+        res[0].values.forEach(row => {
+          const viewName = row[0];
+          const sqlDef = row[1];
+          allSql += `-- View: ${viewName}\n${sqlDef};\n\n`;
+        });
+        document.getElementById('allSqlTextarea').value = allSql;
+        document.getElementById('allSqlModal').classList.add('active');
+      } else {
+        showResultMessage('No views found to export', 'red', 'createResult');
+      }
+    }
+
+    function createView() {
+      const name = document.getElementById('viewName').value.trim();
+      const selectSql = document.getElementById('viewSelect').value.trim();
+      if (!name) { showResultMessage('View name required', 'red', 'createResult'); return; }
+      if (!selectSql) { showResultMessage('SELECT statement required', 'red', 'createResult'); return; }
+      const fullSql = `CREATE VIEW IF NOT EXISTS "${name.replace(/"/g, '""')}" AS ${selectSql}`;
+      const result = execSafe(fullSql);
+      if (result && !result.error) {
+        showResultMessage(`View "${name}" created successfully`, 'green', 'createResult');
+        document.getElementById('viewName').value = '';
+        document.getElementById('viewSelect').value = '';
+        refreshViewsList();
+      } else {
+        showResultMessage(`Error: ${result?.error || 'unknown'}`, 'red', 'createResult');
+      }
+    }
+
+    function queryView() {
+      const viewName = document.getElementById('viewSelectQuery').value;
+      if (!viewName) { showResultMessage('Select a view', 'red', 'queryResult'); return; }
+      const sql = `SELECT * FROM "${viewName.replace(/"/g, '""')}" LIMIT 200`;
+      runAndDisplay(sql);
+    }
+
+    function runCustomSql() {
+      const sql = document.getElementById('customSql').value.trim();
+      if (!sql) { showResultMessage('Enter SQL', 'red', 'queryResult'); return; }
+      runAndDisplay(sql);
+    }
+
+    function runAndDisplay(sql) {
+      const resultDiv = document.getElementById('queryResult');
+      resultDiv.innerHTML = '<div class="spinner-border text-indigo-400">Loading...</div>';
+      setTimeout(() => {
+        const res = execSafe(sql);
+        if (res && !res.error && res.length && res[0]) {
+          const cols = res[0].columns;
+          const rows = res[0].values;
+          let html = `<table class="w-full text-xs border-collapse"><thead><tr class="bg-slate-700">${cols.map(c => `<th class="p-1 border border-slate-600">${escapeHtml(c)}</th>`).join('')} </thead><tbody>`;
+          rows.slice(0, 100).forEach(row => {
+            html += `<tr>${row.map(cell => `<td class="p-1 border border-slate-600 truncate max-w-[150px]" title="${escapeHtml(String(cell))}">${escapeHtml(String(cell))}</td>`).join('')}</tr>`;
+          });
+          html += `</tbody></table>`;
+          if (rows.length > 100) html += `<div class="text-slate-500 text-xs mt-1">Showing first 100 of ${rows.length} rows.</div>`;
+          resultDiv.innerHTML = html;
+        } else {
+          resultDiv.innerHTML = `<div class="text-red-400">${res?.error || 'No results or empty'}</div>`;
+        }
+      }, 20);
+    }
+
+    function exportDatabase() {
+      if (!db) return;
+      const binary = db.export();
+      const blob = new Blob([binary], { type: 'application/x-sqlite3' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'northwind_with_views.db';
+      a.click();
+      URL.revokeObjectURL(url);
+      showResultMessage('Database exported with your views!', 'green', 'createResult');
+    }
+
+    function showResultMessage(msg, type, targetId = 'createResult') {
+      const el = document.getElementById(targetId);
+      el.innerHTML = `<span class="text-${type === 'green' ? 'emerald' : 'red'}-400 text-xs">${msg}</span>`;
+      setTimeout(() => { if (el) el.innerHTML = ''; }, 3000);
+    }
+
+    function escapeHtml(str) { return String(str).replace(/[&<>]/g, m => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;' }[m])); }
+
+    function populateSuggestions() {
+      const container = document.getElementById('suggestionsContainer');
+      container.innerHTML = '';
+      SUGGESTED_VIEWS.forEach(sugg => {
+        const card = document.createElement('div');
+        card.className = 'suggestion-card';
+        card.innerHTML = `
+          <div class="font-mono text-indigo-300 text-sm">${escapeHtml(sugg.name)}</div>
+          <div class="text-slate-400 text-[0.65rem] mt-1 truncate">${escapeHtml(sugg.sql.substring(0, 120))}...</div>
+          <button class="use-suggest-btn mt-2 text-emerald-400 text-[10px] hover:text-emerald-300"><i class="fas fa-arrow-right"></i> Use this view</button>
+        `;
+        const btn = card.querySelector('.use-suggest-btn');
+        btn.addEventListener('click', () => {
+          document.getElementById('viewName').value = sugg.name;
+          document.getElementById('viewSelect').value = sugg.sql;
+        });
+        container.appendChild(card);
+      });
+    }
+
+    // Modal close functions
+    function closeSqlModal() { document.getElementById('sqlModal').classList.remove('active'); }
+    function closeAllSqlModal() { document.getElementById('allSqlModal').classList.remove('active'); }
+    function copyAllSql() {
+      const textarea = document.getElementById('allSqlTextarea');
+      textarea.select();
+      textarea.setSelectionRange(0, 999999);
+      navigator.clipboard.writeText(textarea.value).then(() => {
+        const feedback = document.getElementById('copyFeedback');
+        feedback.classList.remove('hidden');
+        setTimeout(() => feedback.classList.add('hidden'), 2000);
+      }).catch(() => alert('Could not copy'));
+    }
+
+    document.getElementById('closeSqlModalBtn').addEventListener('click', closeSqlModal);
+    document.getElementById('sqlModal').addEventListener('click', (e) => { if (e.target === document.getElementById('sqlModal')) closeSqlModal(); });
+    document.getElementById('closeAllSqlModalBtn').addEventListener('click', closeAllSqlModal);
+    document.getElementById('allSqlModal').addEventListener('click', (e) => { if (e.target === document.getElementById('allSqlModal')) closeAllSqlModal(); });
+    document.getElementById('copyAllSqlBtn').addEventListener('click', copyAllSql);
+    document.getElementById('showAllSqlBtn').addEventListener('click', showAllViewSql);
+
+    document.getElementById('createViewBtn').addEventListener('click', createView);
+    document.getElementById('refreshViewsBtn').addEventListener('click', refreshViewsList);
+    document.getElementById('queryViewBtn').addEventListener('click', queryView);
+    document.getElementById('runCustomSqlBtn').addEventListener('click', runCustomSql);
+    document.getElementById('exportDbBtn').addEventListener('click', exportDatabase);
+
+    initDb();
+  </script>
+</body>
+</html>
